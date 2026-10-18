@@ -215,8 +215,17 @@ void MakeMove(Board *board, int startSquare, int targetSquare, int promoPiece) {
     int color = get_color(piece);
     int type  = get_piece_type(piece);
 
+    if (type == PAWN || board->sq[targetSquare] != NONE) {
+        board->halfmove = 0;
+    } else {
+        board->halfmove++;
+    }
+
     bool prev_ep = board->enpassant;
     int prev_ep_target = board->enpassant_target;
+
+
+
 
     board->enpassant = false;
     board->enpassant_target = -1;
