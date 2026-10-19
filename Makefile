@@ -13,10 +13,10 @@ HEADERS = $(wildcard src/*.h)
 all: $(EXE)
 
 $(EXE): $(SRC) $(HEADERS)
-	$(CC) $(CFLAGS) $(SRC) -o $(EXE)
+	$(CC) $(CFLAGS) $(SRC) -o $(EXE) -lm
 
 debug: $(SRC) $(HEADERS)
-	$(CC) -std=c17 -Wall -Wextra -O0 -g -fsanitize=address,undefined $(SRC) -o $(EXE)-debug
+	$(CC) -std=c17 -Wall -Wextra -O0 -g -fsanitize=address,undefined $(SRC) -o $(EXE)-debug -lm
 
 clean:
 	rm -f $(EXE) $(EXE)-debug $(EXE).exe

@@ -8,6 +8,70 @@ int fen_board[BOARD_SIZE] = {0};
 int DirectionOffsets[8] = {-8, 8, -1, 1, -9, 9, -7, 7};
 int NumbSquaresToEdge[64][8];
 
+#define MAX_HISTORY 2048
+
+static uint64_t History[MAX_HISTORY];   
+static int HistoryCount = 0;
+
+void ClearHistory(void) {
+    HistoryCount = 0;
+}
+
+void PushHistory(uint64_t hash) {
+    if (HistoryCount < MAX_HISTORY) {
+        History[HistoryCount++] = hash;
+    }
+}
+
+int HistorySize(void) {
+    return HistoryCount;
+}
+
+void SetHistorySize(int size) {
+    HistoryCount = size;
+}
+
+bool IsRepetition(const Board *board) {
+    int oldest = HistoryCount - board->halfmove;
+    if (oldest < 0) {
+        oldest = 0;
+    }
+
+    for (int i = HistoryCount - 4; i >= oldest; i -= 2) {
+        if (History[i] == board->hash) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool InsufficientMaterial(const Board *board) {
+    int minors = 0;
+
+    for (int sq = 0; sq < 64; sq++) {
+        int type = get_piece_type(board->sq[sq]);
+
+        if (type == PAWN || type == ROOK || type == QUEEN) {
+            return false;
+        }
+        if (type == KNIGHT || type == BISHOP) {
+            minors++;
+        }
+    }
+
+    return minors <= 1;
+}
+
+bool IsDraw(const Board *board) {
+    if (board->halfmove >= 100) {
+        return true;
+    }
+    if (IsRepetition(board)) {
+        return true;
+    }
+    return InsufficientMaterial(board);
+}
+
 void PrecomputedMoveData(void) {
     for (int file = 0; file < 8; file++) {
         for (int rank = 0; rank < 8; rank++) {
@@ -207,15 +271,21 @@ Board fen_to_board(char fen[]) {
         b.sq[i] = converted.sq[i];
     }
 
+    b.hash = ComputeHash(&b);
+
     return b;
 }
 
 void MakeMove(Board *board, int startSquare, int targetSquare, int promoPiece) {
-    int piece = board->sq[startSquare];
-    int color = get_color(piece);
-    int type  = get_piece_type(piece);
+    int piece    = board->sq[startSquare];
+    int color    = get_color(piece);
+    int type     = get_piece_type(piece);
+    int captured = board->sq[targetSquare];
 
-    if (type == PAWN || board->sq[targetSquare] != NONE) {
+    uint64_t hash = board->hash ^ CastleKey(board) ^ EnPassantKey(board);
+
+    // 50-move rule
+    if (type == PAWN || captured != NONE) {
         board->halfmove = 0;
     } else {
         board->halfmove++;
@@ -224,14 +294,12 @@ void MakeMove(Board *board, int startSquare, int targetSquare, int promoPiece) {
     bool prev_ep = board->enpassant;
     int prev_ep_target = board->enpassant_target;
 
-
-
-
     board->enpassant = false;
     board->enpassant_target = -1;
 
     if (type == PAWN && prev_ep && targetSquare == prev_ep_target) {
         int capSq = targetSquare + (color == WHITE ? 8 : -8);
+        hash ^= PieceKey(board->sq[capSq], capSq);
         board->sq[capSq] = NONE;
     }
 
@@ -256,18 +324,22 @@ void MakeMove(Board *board, int startSquare, int targetSquare, int promoPiece) {
                 // White O-O
                 board->sq[63] = NONE;
                 board->sq[61] = WHITE | ROOK;
+                hash ^= PieceKey(WHITE | ROOK, 63) ^ PieceKey(WHITE | ROOK, 61);
             } else if (targetSquare == 58) {
                 // White O-O-O
                 board->sq[56] = NONE;
                 board->sq[59] = WHITE | ROOK;
+                hash ^= PieceKey(WHITE | ROOK, 56) ^ PieceKey(WHITE | ROOK, 59);
             } else if (targetSquare == 6) {
                 // Black O-O
                 board->sq[7] = NONE;
                 board->sq[5] = BLACK | ROOK;
+                hash ^= PieceKey(BLACK | ROOK, 7) ^ PieceKey(BLACK | ROOK, 5);
             } else if (targetSquare == 2) {
                 // Black O-O-O
                 board->sq[0] = NONE;
                 board->sq[3] = BLACK | ROOK;
+                hash ^= PieceKey(BLACK | ROOK, 0) ^ PieceKey(BLACK | ROOK, 3);
             }
         }
     }
@@ -286,15 +358,23 @@ void MakeMove(Board *board, int startSquare, int targetSquare, int promoPiece) {
     }
 
     board->sq[startSquare] = NONE;
+    hash ^= PieceKey(piece, startSquare);
+
+    if (captured != NONE) {
+        hash ^= PieceKey(captured, targetSquare);
+    }
 
     if (promoPiece != NONE) {
         board->sq[targetSquare] = color | promoPiece;
     } else {
         board->sq[targetSquare] = piece;
     }
+    hash ^= PieceKey(board->sq[targetSquare], targetSquare);
 
     if (!board->white_to_move) {
         board->fullmove++;
     }
     board->white_to_move = !board->white_to_move;
+
+    board->hash = hash ^ CastleKey(board) ^ EnPassantKey(board) ^ ZobristSide;
 }

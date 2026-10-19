@@ -59,7 +59,61 @@ const char *fens[] = {
 
 #define FEN_COUNT (sizeof(fens) / sizeof(fens[0]))
 
-void RunBench(int depth) {
+typedef struct {
+    int wtime, btime, winc, binc;   // ms
+    int movestogo;
+    int movetime;                   // ms
+    long long nodes;
+} GoLimits;
+
+static long long GoValue(const char *line, const char *key, long long fallback) {
+    const char *p = strstr(line, key);
+    if (p == NULL) {
+        return fallback;
+    }
+    return atoll(p + strlen(key));
+}
+
+static GoLimits ParseGo(const char *line) {
+    GoLimits limits;
+    limits.wtime     = (int)GoValue(line, " wtime ", -1);
+    limits.btime     = (int)GoValue(line, " btime ", -1);
+    limits.winc      = (int)GoValue(line, " winc ", 0);
+    limits.binc      = (int)GoValue(line, " binc ", 0);
+    limits.movestogo = (int)GoValue(line, " movestogo ", 0);
+    limits.movetime  = (int)GoValue(line, " movetime ", -1);
+    limits.nodes     = GoValue(line, " nodes ", -1);
+    return limits;
+}
+
+static int TimeForMove(const GoLimits *limits, bool white_to_move) {
+    if (limits->movetime >= 0) {
+        return limits->movetime;
+    }
+
+    int timeLeft = white_to_move ? limits->wtime : limits->btime;
+    int inc      = white_to_move ? limits->winc  : limits->binc;
+
+    if (timeLeft < 0) {
+        return -1;
+    }
+
+    int movesLeft = limits->movestogo > 0 ? limits->movestogo : 20;
+    int budget = timeLeft / movesLeft + inc / 2;
+
+    // keep 50ms in the bank so we never flag
+    if (budget > timeLeft - 50) {
+        budget = timeLeft - 50;
+    }
+    if (budget < 1) {
+        budget = 1;
+    }
+    return budget;
+}
+
+#define BENCH_PLAYOUTS 5000
+
+void RunBench(int playouts) {
     unsigned long long total = 0;
     clock_t start = clock();
 
@@ -68,9 +122,14 @@ void RunBench(int depth) {
         strcpy(fen, fens[i]);
         Board b = fen_to_board(fen);
 
-        // Perft stands in for the search until MCTS exists: it is
-        // deterministic, so OpenBench gets the same node count every run.
-        unsigned long long count = Perft(depth, &b);
+        // fresh tree and no game history
+        ClearHistory();
+        ClearTree();
+
+        unsigned long long count = 0;
+        for (int p = 0; p < playouts; p++) {
+            count += RunPlayout(&b);
+        }
 
         printf("Position %2zu/%zu: nodes %10llu\n", i + 1, FEN_COUNT, count);
         total += count;
@@ -86,10 +145,14 @@ void RunBench(int depth) {
     fflush(stdout);
 }
 
+
+
 int main(int argc, char **argv) {
     PrecomputedMoveData();
+    InitZobrist();
+    InitTree(64);
     if (argc > 1 && strcmp(argv[1], "bench") == 0) {
-        RunBench(argc > 2 ? atoi(argv[2]) : 4);
+        RunBench(argc > 2 ? atoi(argv[2]) : BENCH_PLAYOUTS);
         return 0;
     }
     char fen[100] = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -126,6 +189,7 @@ int main(int argc, char **argv) {
 
         else if (strncmp(line, "position", 8) == 0) {
             char fen_str[128] = "";
+            ClearHistory();
 
             if (strstr(line, "startpos") != NULL) {
                 strcpy(fen_str, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
@@ -205,6 +269,7 @@ int main(int argc, char **argv) {
                             promo = KNIGHT;
                         }
                     }
+                    PushHistory(current_board.hash);
                     MakeMove(&current_board, startSq, targetSq, promo);
 
                     token_start = token_end;
@@ -212,16 +277,9 @@ int main(int argc, char **argv) {
             }
         }
         else if (strncmp(line, "go", 2) == 0) {
-            // Placeholder until the MCTS search exists: play the first legal move.
-            MoveList moves;
-            GenerateMoves(&current_board, &moves);
-
-            if (moves.count > 0) {
-                print_uci_move(moves.moves[0][0], moves.moves[0][1], moves.moves[0][2]);
-            } else {
-                printf("bestmove 0000\n");
-            }
-            fflush(stdout);
+            GoLimits limits = ParseGo(line);
+            int budget = TimeForMove(&limits, current_board.white_to_move);
+            Search(&current_board, budget, limits.nodes);
         }
 
         else if (strncmp(line, "perft", 5) == 0) {
@@ -231,14 +289,25 @@ int main(int argc, char **argv) {
         }
 
         else if (strncmp(line, "bench", 5) == 0) {
-            int depth = 1;
-            sscanf(line + 5, "%d", &depth);
-            RunBench(depth);
+            int playouts = BENCH_PLAYOUTS;
+            sscanf(line + 5, "%d", &playouts);
+            RunBench(playouts);
+        }
+
+        else if (strcmp(line, "hash") == 0) {
+            printf("%016llx%s\n", (unsigned long long)current_board.hash,
+                   IsRepetition(&current_board) ? " (repetition)" : "");
+            fflush(stdout);
+        }
+
+        else if (strcmp(line, "eval") == 0) {
+            printf("material %d, win chance %.3f\n", Evaluate(&current_board), WinChance(&current_board));
+            fflush(stdout);
         }
 
         else if (strcmp(line, "quit") == 0) {
-            break; 
-        } 
+            break;
+        }
     }
 
     return 0;

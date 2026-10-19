@@ -4,6 +4,8 @@
 #define BOARD_SIZE 64
 
 #include <stdbool.h>
+#include <stdbool.h>
+#include <stdint.h>
 
 enum PieceType {
     NONE = 0,
@@ -58,6 +60,7 @@ typedef struct {
     int checks[2][2];
     int whiteKingLocation;
     int blackKingLocation;
+    uint64_t hash;
 } Board;
 
 typedef struct {
@@ -79,6 +82,12 @@ void  print_uci_move(int startSq, int targetSq, int promo);
 Board convert_to_move_board(int inference_board[64]);
 Board fen_to_board(char fen[]);
 void  MakeMove(Board *board, int startSquare, int targetSquare, int promoPiece);
+void  ClearHistory(void);
+void  PushHistory(uint64_t hash);
+bool  IsRepetition(const Board *board);
+bool  IsDraw(const Board *board);
+int   HistorySize(void);
+void  SetHistorySize(int size);
 
 
 /* ---- movegen.c ---- */
@@ -98,8 +107,23 @@ int Evaluate(const Board *board);
 unsigned long long Perft(int depth, const Board *board);
 void PrintPerftTable(int maxDepth, const Board *board);
 
+/* ---- search.c ---- */
+void InitTree(int megabytes);
+void ClearTree(void);
+bool ExpandNode(uint32_t index, const Board *board);
+double WinChance(const Board *board);
+int  RunPlayout(const Board *root);
+void Search(const Board *root, int timeMs, long long maxNodes);
+
+/* ---- zobrist.c ---- */
+extern uint64_t ZobristSide;
+void     InitZobrist(void);
+uint64_t ComputeHash(const Board *board);
+uint64_t PieceKey(int piece, int sq);
+uint64_t CastleKey(const Board *board);
+uint64_t EnPassantKey(const Board *board);
 
 /* ---- uci.c ---- */
-void RunBench(int depth);
+void RunBench(int playouts);
  
 #endif
